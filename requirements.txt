@@ -1,0 +1,17 @@
+ollama
+openwakeword
+faster-whisper
+piper-tts
+pyautogui
+easyocr
+customtkinter
+pystray
+Pillow
+duckduckgo-search
+pyperclip
+pyaudio
+sounddevice
+numpy
+opencv-python
+python-dotenv
+opencv-python
