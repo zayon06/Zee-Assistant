@@ -41,11 +41,22 @@ class WakeWordDetector:
     def _load(self) -> bool:
         try:
             from openwakeword.model import Model
+            
+            # If path doesn't exist as a direct file, try relative to scripts/models
+            model_path = WAKE_MODEL
+            if not os.path.exists(model_path):
+                alt_path = os.path.join("scripts", "models", f"{WAKE_MODEL}.onnx")
+                if os.path.exists(alt_path):
+                    model_path = alt_path
+                else:
+                    # Fallback to just the name (will try resources)
+                    model_path = WAKE_MODEL
+
             self._model = Model(
-                wakeword_models=[WAKE_MODEL],
+                wakeword_models=[model_path],
                 inference_framework="onnx",
             )
-            print(f"[WakeWord] Model '{WAKE_MODEL}' loaded — threshold {THRESHOLD}")
+            print(f"[WakeWord] Loaded: {model_path} — threshold {THRESHOLD}")
             return True
         except Exception as e:
             print(f"[WakeWord] Load failed: {e}")

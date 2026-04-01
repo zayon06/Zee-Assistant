@@ -37,7 +37,7 @@ docker compose -f docker/docker-compose.yml up -d
 Once installed, start the client. The client will automatically spin up the background FastAPI server.
 ```bash
 source .venv/Scripts/activate
-python client/main.py
+python -m client.main
 ```
 
 ## 6. Testing

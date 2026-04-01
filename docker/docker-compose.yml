@@ -1,6 +1,33 @@
 version: "3.8"
 
 services:
+  # ── AI Model Engine (Ollama) ────────────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: zee-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+    # Uncomment the following block if your remote server has an NVIDIA GPU
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  # ── Auto Model Puller (One-shot) ───────────────────────────────────────────
+  ollama-puller:
+    image: curlimages/curl:latest
+    container_name: zee-ollama-puller
+    depends_on:
+      - ollama
+    entrypoint: [ "sh", "-c", "until curl -s http://ollama:11434/api/tags; do sleep 5; done && curl -X POST http://ollama:11434/api/pull -d '{\"name\": \"qwen2-vl\"}'" ]
+
+  # ── Web Search Engine (SearXNG) ─────────────────────────────────────────────
   searxng:
     image: searxng/searxng:latest
     container_name: zee-searxng
@@ -16,3 +43,6 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+
+volumes:
+  ollama_data:

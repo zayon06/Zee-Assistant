@@ -48,7 +48,20 @@ else
     echo "Piper TTS voice model already exists."
 fi
 
-# 5. Env file
+# 5. Download Wake Word Model
+WAKE_DIR="scripts/models"
+mkdir -p "$WAKE_DIR"
+WAKE_MODEL_FILE="$WAKE_DIR/hey_jarvis.onnx"
+
+if [ ! -f "$WAKE_MODEL_FILE" ]; then
+    echo "Downloading OpenWakeWord model (hey_jarvis)..."
+    curl -L "https://github.com/dscripka/openWakeWord/raw/main/openwakeword/resources/models/hey_jarvis_v0.1.onnx" -o "$WAKE_MODEL_FILE"
+    echo "Wake word model downloaded."
+else
+    echo "Wake word model already exists."
+fi
+
+# 6. Env file
 if [ ! -f ".env" ]; then
     cp .env.example .env
     echo "Created .env from .env.example."
