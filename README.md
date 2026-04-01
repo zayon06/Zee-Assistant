@@ -14,11 +14,11 @@ This is the fully rebuilt, streaming client-server version of Zee AI.
 - [Ollama](https://ollama.com/) (Must have `qwen2-vl` pulled: `ollama pull qwen2-vl`)
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (For SearXNG local search)
 
-## 2. Quick Install (Windows)
-Open PowerShell as Administrator and run the install script:
-```powershell
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-.\scripts\install.ps1
+## 2. Quick Install (Bash)
+Open your terminal (Git Bash recommended) and run:
+```bash
+chmod +x scripts/install.sh
+./scripts/install.sh
 ```
 *(This script creates the virtual environment, installs requirements, and downloads the Piper TTS voice model.)*
 
@@ -35,14 +35,14 @@ docker compose -f docker/docker-compose.yml up -d
 
 ## 5. Running Zee
 Once installed, start the client. The client will automatically spin up the background FastAPI server.
-```powershell
-.\.venv\Scripts\activate
+```bash
+source .venv/Scripts/activate
 python client/main.py
 ```
 
 ## 6. Testing
 To verify core components (no voice/UI):
-```powershell
-.\.venv\Scripts\activate
+```bash
+source .venv/Scripts/activate
 pytest tests/ -v
 ```
