@@ -187,9 +187,9 @@ class ZeeHUD(ctk.CTk):
         self.input_box.bind("<Return>", self._on_enter)
 
         self.mic_lbl = ctk.CTkLabel(
-            input_row, text="🎙", width=36, height=36,
-            fg_color="transparent", text_color="#000000",
-            corner_radius=18, font=("Segoe UI", 18)
+            input_row, text="●", width=36, height=36,
+            fg_color="transparent", text_color=TEAL_DIM,
+            corner_radius=18, font=("Segoe UI", 16)
         )
         self.mic_lbl.pack(side="right", padx=(0, 4), pady=6)
 
@@ -256,10 +256,18 @@ class ZeeHUD(ctk.CTk):
 
         if state == "Listening":
             self.voice_btn.configure(fg_color=GREEN, text_color=DARK_BG)
-            self.mic_lbl.configure(text_color="#000000", fg_color="#666666")
+            self.mic_lbl.configure(text_color=TEAL_DIM, fg_color="transparent")
         else:
             self.voice_btn.configure(fg_color=TEAL_DIM, text_color=TEXT_DIM)
             self.mic_lbl.configure(text_color=TEXT_DIM, fg_color="transparent")
+
+    def safe_set_input_text(self, text: str):
+        self.after(0, self._set_input_text, text)
+
+    def _set_input_text(self, text: str):
+        self.input_box.delete("0", "end")
+        self.input_box.insert("0", text)
+
 
     def toggle_screen(self):
         self.screen_mode = not self.screen_mode
@@ -355,24 +363,24 @@ class ZeeHUD(ctk.CTk):
             return
         
         # Base state
-        size = 18
-        bg = "#666666" # Gray
+        size = 16
+        color = TEAL_DIM
         
         # Pulse based on RMS volume severity
         if rms > 2000:
-            size = 24
-            bg = "#BBBBBB" # Light Gray
+            size = 32
+            color = TEAL
         elif rms > 1000:
-            size = 21
-            bg = "#999999" # Medium-Light Gray
+            size = 26
+            color = TEAL
         elif rms > 400:
-            size = 19
-            bg = "#888888" # Medium Gray
+            size = 20
+            color = TEAL_DIM
 
         self.mic_lbl.configure(
             font=("Segoe UI", size), 
-            text_color="#000000",
-            fg_color=bg
+            text_color=color,
+            fg_color="transparent"
         )
 
     def safe_add_action(self, tag: str, detail):

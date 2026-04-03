@@ -71,53 +71,59 @@ class ServerManager:
 # ── Voice agent ───────────────────────────────────────────────────────────────
 
 def voice_agent(hud, ws_client, stop_event: threading.Event):
-    """Background thread: wake word → STT → send to server."""
-    from client.voice.wakeword import WakeWordDetector
+    """Background thread: Continuous Cloud STT to act as Wake Word + Command Processor."""
     from client.voice.stt      import GroqSTT
     from client.voice.tts      import EdgeTTS
+    import re
 
     stt = GroqSTT()
     tts = EdgeTTS()
     stt.load()
     tts.load()
 
-    triggered = threading.Event()
-
-    def on_wake():
-        if hud.voice_paused:
-            return
-        triggered.set()
-
-    detector = WakeWordDetector(on_triggered=on_wake)
-    detector.start()
-
-    hud.safe_add_system("Son online — say 'Hey Son' or type below.")
+    hud.safe_add_system("Son online — say 'Son' or type below.")
     hud.safe_set_state("Listening")
 
     def on_partial(text: str):
-        hud.safe_add_system(f"Hearing: {text}")
+        hud.safe_set_input_text(text)
         
     def on_volume(rms: float):
         hud.safe_animate_mic(rms)
 
+    # Wake words (soundalikes included since Whisper sometimes guesses these for 'Son')
+    WAKE_WORDS = r'^(son|sun|zion|zone|sam|song|sum|some)[\s\,\.\?!]'
+
     while not stop_event.is_set():
-        if triggered.wait(timeout=0.5):
-            triggered.clear()
-            if hud.voice_paused:
-                continue
+        if hud.voice_paused:
+            time.sleep(0.5)
+            continue
 
+        hud.safe_set_state("Listening")
+
+        text = stt.transcribe(on_partial=on_partial, on_volume=on_volume)
+        clean_text = text.strip()
+
+        if not clean_text:
+            continue
+
+        # Check if the text starts with the Wake Word
+        match = re.search(WAKE_WORDS, clean_text, re.IGNORECASE)
+        
+        if match:
+            # Wake word detected! Extract the actual command by removing the wake word
+            command = clean_text[match.end():].strip()
+            
+            # If the user just said "Son" and paused, we still want to acknowledge.
+            if not command:
+                command = "Hello."
+
+            hud.safe_set_input_text("") # Clear live typing
+            hud.safe_add_message("YOU", clean_text, "you")
+            _send_and_speak(command, hud, ws_client, tts)
+        else:
+            # It heard speech but it wasn't for Son. Ignore it.
+            hud.safe_set_input_text("") # Clear partials
             hud.safe_set_state("Listening")
-            hud.safe_add_system("Listening…")
-
-            text = stt.transcribe(on_partial=on_partial, on_volume=on_volume)
-
-            if text.strip():
-                hud.safe_add_message("YOU", text, "you")
-                _send_and_speak(text, hud, ws_client, tts)
-            else:
-                hud.safe_set_state("Listening")
-
-    detector.stop()
 
 
 def _send_and_speak(text: str, hud, ws_client, tts):
@@ -154,7 +160,7 @@ def main():
     def on_action(msg: dict):
         tag    = msg.get("tag", "")
         detail = msg.get("args", msg.get("content", ""))
-        hud.safe_add_action(tag, str(detail))
+        hud.safe_add_action(tag, detail)
         if tag == "LOOK":
             hud.after(0, hud.trigger_vision_flash)
 
