@@ -73,11 +73,11 @@ class ServerManager:
 def voice_agent(hud, ws_client, stop_event: threading.Event):
     """Background thread: wake word → STT → send to server."""
     from client.voice.wakeword import WakeWordDetector
-    from client.voice.stt      import FasterWhisperSTT
-    from client.voice.tts      import PiperTTS
+    from client.voice.stt      import GroqSTT
+    from client.voice.tts      import EdgeTTS
 
-    stt = FasterWhisperSTT()
-    tts = PiperTTS()
+    stt = GroqSTT()
+    tts = EdgeTTS()
     stt.load()
     tts.load()
 
@@ -91,11 +91,14 @@ def voice_agent(hud, ws_client, stop_event: threading.Event):
     detector = WakeWordDetector(on_triggered=on_wake)
     detector.start()
 
-    hud.safe_add_system("Zee online — say 'Hey Zee' or type below.")
+    hud.safe_add_system("Son online — say 'Hey Son' or type below.")
     hud.safe_set_state("Listening")
 
     def on_partial(text: str):
         hud.safe_add_system(f"Hearing: {text}")
+        
+    def on_volume(rms: float):
+        hud.safe_animate_mic(rms)
 
     while not stop_event.is_set():
         if triggered.wait(timeout=0.5):
@@ -106,7 +109,7 @@ def voice_agent(hud, ws_client, stop_event: threading.Event):
             hud.safe_set_state("Listening")
             hud.safe_add_system("Listening…")
 
-            text = stt.transcribe(on_partial=on_partial)
+            text = stt.transcribe(on_partial=on_partial, on_volume=on_volume)
 
             if text.strip():
                 hud.safe_add_message("YOU", text, "you")
@@ -134,13 +137,13 @@ def _send_and_speak(text: str, hud, ws_client, tts):
 def main():
     from client.hud       import ZeeHUD
     from client.ws_client import ZeeWSClient
-    from client.voice.tts import PiperTTS
+    from client.voice.tts import EdgeTTS
 
     server  = ServerManager()
     server.start()
     server.wait_ready()
 
-    tts     = PiperTTS()
+    tts     = EdgeTTS()
     tts.load()
     stop_ev = threading.Event()
     hud     = ZeeHUD()
@@ -158,8 +161,7 @@ def main():
     def on_done(final: str):
         hud.safe_end_stream()
         hud.safe_set_state("Speaking")
-        tts.speak(final)
-        tts.wait()
+        tts.synthesize(final)
         hud.safe_set_state("Listening")
 
     def on_error(msg: str):
