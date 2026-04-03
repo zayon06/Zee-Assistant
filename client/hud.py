@@ -49,8 +49,9 @@ class ZeeHUD(ctk.CTk):
         self.overrideredirect(True)
         self.attributes("-topmost", True)
         self.attributes("-alpha", 0.94)
+        self.wm_attributes("-transparentcolor", DARK_BG)
         self.configure(fg_color=DARK_BG)
-        self.title("Zee — Noiz Technologies")
+        self.title("Son — Noiz Technologies")
 
         # State
         self._state       = "Idle"
@@ -89,7 +90,7 @@ class ZeeHUD(ctk.CTk):
             widget.bind("<B1-Motion>",     self._drag_move)
 
         brand = ctk.CTkLabel(
-            self.title_bar, text="ZEE",
+            self.title_bar, text="SON",
             font=("Segoe UI", 17, "bold"), text_color=TEAL
         )
         brand.pack(side="left", padx=(18, 0))
@@ -173,7 +174,7 @@ class ZeeHUD(ctk.CTk):
 
         self.input_box = ctk.CTkEntry(
             input_row,
-            placeholder_text="Say 'Hey Zee' or type here…",
+            placeholder_text="Say 'Hey Son' or type here…",
             fg_color="transparent",
             text_color=TEXT_PRI,
             placeholder_text_color=TEXT_DIM,
@@ -184,6 +185,13 @@ class ZeeHUD(ctk.CTk):
             side="left", fill="x", expand=True, padx=(12, 6), pady=6
         )
         self.input_box.bind("<Return>", self._on_enter)
+
+        self.mic_lbl = ctk.CTkLabel(
+            input_row, text="🎙", width=36, height=36,
+            fg_color="transparent", text_color="#000000",
+            corner_radius=18, font=("Segoe UI", 18)
+        )
+        self.mic_lbl.pack(side="right", padx=(0, 4), pady=6)
 
         send_btn = ctk.CTkButton(
             input_row, text="↑", width=36, height=36,
@@ -248,8 +256,10 @@ class ZeeHUD(ctk.CTk):
 
         if state == "Listening":
             self.voice_btn.configure(fg_color=GREEN, text_color=DARK_BG)
+            self.mic_lbl.configure(text_color="#000000", fg_color="#666666")
         else:
             self.voice_btn.configure(fg_color=TEAL_DIM, text_color=TEXT_DIM)
+            self.mic_lbl.configure(text_color=TEXT_DIM, fg_color="transparent")
 
     def toggle_screen(self):
         self.screen_mode = not self.screen_mode
@@ -259,7 +269,7 @@ class ZeeHUD(ctk.CTk):
             text_color=DARK_BG if on else TEXT_DIM,
         )
         self.safe_add_system(
-            f"Screen Analysis {'ON — Zee sees every message' if on else 'OFF'}."
+            f"Screen Analysis {'ON — Son sees every message' if on else 'OFF'}."
         )
 
     def toggle_voice(self):
@@ -308,9 +318,9 @@ class ZeeHUD(ctk.CTk):
     # ── Token streaming ───────────────────────────────────────────────────────
 
     def start_stream(self):
-        """Create a new streaming label for the current Zee response."""
+        """Create a new streaming label for the current Son response."""
         self._stream_buf   = ""
-        self._stream_label = self.add_message("ZEE", "…", "zee")
+        self._stream_label = self.add_message("SON", "…", "zee")
 
     def append_token(self, token: str):
         """Append a token to the live streaming label."""
@@ -336,6 +346,34 @@ class ZeeHUD(ctk.CTk):
     def safe_start_stream(self):         self.after(0, self.start_stream)
     def safe_append_token(self, tok):    self.after(0, self.append_token, tok)
     def safe_end_stream(self):           self.after(0, self.end_stream)
+    
+    def safe_animate_mic(self, rms: float):
+        self.after(0, self.animate_mic, rms)
+
+    def animate_mic(self, rms: float):
+        if self._state != "Listening":
+            return
+        
+        # Base state
+        size = 18
+        bg = "#666666" # Gray
+        
+        # Pulse based on RMS volume severity
+        if rms > 2000:
+            size = 24
+            bg = "#BBBBBB" # Light Gray
+        elif rms > 1000:
+            size = 21
+            bg = "#999999" # Medium-Light Gray
+        elif rms > 400:
+            size = 19
+            bg = "#888888" # Medium Gray
+
+        self.mic_lbl.configure(
+            font=("Segoe UI", size), 
+            text_color="#000000",
+            fg_color=bg
+        )
 
     def safe_add_action(self, tag: str, detail: str = ""):
         self.after(0, self.add_message, f"⚙ {tag}", detail, "action")
