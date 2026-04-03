@@ -7,6 +7,8 @@ import subprocess
 import sys
 import threading
 import time
+import re
+import keyboard
 
 from dotenv import load_dotenv
 
@@ -94,13 +96,29 @@ def voice_agent(hud, ws_client, stop_event: threading.Event):
     WAKE_WORDS = r'^(son|sun|zion|zone|sam|song|sum|some)[\s\,\.\?!]'
 
     while not stop_event.is_set():
-        if hud.voice_paused:
-            time.sleep(0.5)
+        try:
+            # Peek if F5 is pressed right now (in case it starts while paused)
+            current_ptt = keyboard.is_pressed('f5')
+        except Exception:
+            current_ptt = False
+
+        if hud.voice_paused and not current_ptt:
+            time.sleep(0.1)
             continue
 
         hud.safe_set_state("Listening")
 
-        text = stt.transcribe(on_partial=on_partial, on_volume=on_volume)
+        ptt_used = [False]
+        def is_active_callback() -> bool:
+            try:
+                state = keyboard.is_pressed('f5')
+                if state:
+                    ptt_used[0] = True
+                return state
+            except Exception:
+                return False
+
+        text = stt.transcribe(on_partial=on_partial, on_volume=on_volume, is_active=is_active_callback)
         clean_text = text.strip()
 
         if not clean_text:
@@ -109,6 +127,15 @@ def voice_agent(hud, ws_client, stop_event: threading.Event):
         # Check if the text starts with the Wake Word
         match = re.search(WAKE_WORDS, clean_text, re.IGNORECASE)
         
+        # Override wake word check if F5 was used
+        if ptt_used[0]:
+            command = clean_text[match.end():].strip() if match else clean_text
+            if command:
+                hud.safe_set_input_text("") # Clear live typing
+                hud.safe_add_message("YOU (F5)", clean_text, "you")
+                _send_and_speak(command, hud, ws_client, tts)
+            continue
+
         if match:
             # Wake word detected! Extract the actual command by removing the wake word
             command = clean_text[match.end():].strip()
