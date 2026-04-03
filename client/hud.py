@@ -375,8 +375,18 @@ class ZeeHUD(ctk.CTk):
             fg_color=bg
         )
 
-    def safe_add_action(self, tag: str, detail: str = ""):
-        self.after(0, self.add_message, f"⚙ {tag}", detail, "action")
+    def safe_add_action(self, tag: str, detail):
+        """Format and show an action line."""
+        clean_detail = detail
+        if isinstance(detail, dict):
+            if tag == "SEARCH" and "query" in detail:
+                 clean_detail = detail["query"]
+            elif len(detail) == 1:
+                clean_detail = list(detail.values())[0]
+            else:
+                clean_detail = str(detail)
+        
+        self.after(0, self.add_message, f"⚙ {tag}", str(clean_detail), "action")
 
     # ── Input ─────────────────────────────────────────────────────────────────
 
