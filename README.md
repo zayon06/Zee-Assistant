@@ -4,7 +4,7 @@ This is the fully rebuilt, streaming client-server version of Zee AI.
 
 ## Features
 1. **Screen Context** (`mss` capturing, Qwen2-VL local vision engine)
-2. **Web Search** (Self-hosted SearXNG directly in Docker, DDG fallback)
+2. **Web Search** (Built-in DuckDuckGo search)
 3. **Voice UI** (OpenWakeWord for instant trigger, Faster-Whisper STT, Piper local TTS)
 4. **App Control** (Launch local apps, adjust volume, code context reading)
 5. **Streaming Backend** (FastAPI WebSocket bridging to Ollama)
@@ -12,7 +12,7 @@ This is the fully rebuilt, streaming client-server version of Zee AI.
 ## 1. Prerequisites
 - Python 3.11+
 - [Ollama](https://ollama.com/) (Must have `qwen2-vl` pulled: `ollama pull qwen2-vl`)
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (For SearXNG local search)
+- [Ollama](https://ollama.com/) (Must have `qwen2-vl` pulled: `ollama pull qwen2-vl`)
 
 ## 2. Quick Install (Bash)
 Open your terminal (Git Bash recommended) and run:
@@ -27,11 +27,7 @@ Copy `.env.example` to `.env` and review the settings.
 By default, it looks for Ollama on `localhost:11434`. 
 If you use Colab/ngrok, update `OLLAMA_HOST` in `.env`.
 
-## 4. Web Search (Docker)
-Ensure Docker Desktop is running, then start SearXNG:
-```powershell
-docker compose -f docker/docker-compose.yml up -d
-```
+
 
 ## 5. Running Zee
 Once installed, start the client. The client will automatically spin up the background FastAPI server.
