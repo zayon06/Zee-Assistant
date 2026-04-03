@@ -10,7 +10,7 @@ import time
 import edge_tts
 import pygame
 
-VOICE_MODEL = os.getenv("PIPER_VOICE", "en-US-ChristopherNeural") # Let's use a good male voice for "Son"
+VOICE_MODEL = os.getenv("EDGE_VOICE", "en-US-ChristopherNeural") # Let's use a good male voice for "Son"
 
 
 class EdgeTTS:
@@ -39,9 +39,19 @@ class EdgeTTS:
 
         print(f"[TTS] Synthesizing: {text!r}")
         try:
-            # 1. Generate MP3 via edge-tts async
+            # 1. Generate MP3 via edge-tts async inside a fresh thread to avoid loop conflicts
             communicate = edge_tts.Communicate(text, VOICE_MODEL)
-            asyncio.run(communicate.save(self._temp_file))
+            
+            import threading
+            def _generate():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(communicate.save(self._temp_file))
+                loop.close()
+                
+            t = threading.Thread(target=_generate)
+            t.start()
+            t.join()
 
             # 2. Play via pygame
             pygame.mixer.music.load(self._temp_file)

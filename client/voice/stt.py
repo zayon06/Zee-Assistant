@@ -1,22 +1,23 @@
 """
-Speech-to-Text — Groq Cloud API via sounddevice
-Records audio until silence using sounddevice, then rapidly transcribes using Groq whisper-large-v3.
+Speech-to-Text — Groq Cloud API via sounddevice (Callback Mode)
+Records audio using callback to avoid 'Blocking API not supported' on Windows WDM-KS.
 """
 import io
 import os
-import threading
+import queue
 import wave
+import threading
 from typing import Callable, Optional
 
 import numpy as np
 import sounddevice as sd
 
-GROQ_API_KEY      = os.getenv("XAI_API_KEY") # Groq keys stored here in this config
+GROQ_API_KEY      = os.getenv("XAI_API_KEY") 
 STT_MODEL         = "whisper-large-v3"
 SAMPLE_RATE       = 16000
 CHUNK             = 1024
-SILENCE_THRESHOLD = 300    # RMS energy below this = silence
-MAX_SILENCE_CHUNKS = 28    # ~1.8 s of silence → stop
+SILENCE_THRESHOLD = 80     # Lowered for maximum sensitivity
+MAX_SILENCE_CHUNKS = 25    # ~1.6 s of silence → stop
 MIN_SPEECH_CHUNKS  = 6     # require at least ~0.4 s of speech before checking silence
 MAX_DURATION_S     = 20.0  # hard limit
 
@@ -25,8 +26,7 @@ class GroqSTT:
     def __init__(self):
         self._loaded = False
         self._groq   = None
-
-    # ── Public API ────────────────────────────────────────────────────────────
+        self._queue  = queue.Queue()
 
     def load(self) -> bool:
         if self._loaded:
@@ -45,23 +45,28 @@ class GroqSTT:
             print(f"[STT] Groq Init failed: {e}")
             return False
 
+    def _callback(self, indata, frames, time_info, status):
+        if status:
+            print(f"[STT] Callback Status: {status}")
+        self._queue.put(indata.copy())
+
     def transcribe(
         self,
         on_partial: Optional[Callable[[str], None]] = None,
         on_volume: Optional[Callable[[float], None]] = None,
         max_duration: float = MAX_DURATION_S,
     ) -> str:
-        """
-        Record audio until silence detected, then send to Groq.
-        """
         if not self._loaded and not self.load():
             return ""
 
-        frames = self._record(on_volume, max_duration)
+        # Clear queue for fresh recording
+        with self._queue.mutex:
+            self._queue.queue.clear()
+
+        frames = self._record(on_volume, on_partial, max_duration)
         if not frames:
             return ""
 
-        # Make it a virtual WAV file
         buf = io.BytesIO()
         with wave.open(buf, "wb") as wf:
             wf.setnchannels(1)
@@ -85,11 +90,32 @@ class GroqSTT:
             print(f"[STT] Groq API error: {e}")
             return ""
 
-    # ── Internal ──────────────────────────────────────────────────────────────
+    def _transcribe_background(self, frames: list[bytes], on_partial: Callable[[str], None]):
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(SAMPLE_RATE)
+            wf.writeframes(b"".join(frames))
+        try:
+            res = self._groq.audio.transcriptions.create(
+                file=("partial.wav", buf.getvalue()),
+                model=STT_MODEL,
+                prompt="The user is talking to their AI assistant Son. They might use some broken english.",
+                response_format="text",
+                language="en"
+            )
+            text = str(res).strip()
+            if text:
+                print(f"[STT] Live: {text}")
+                on_partial(text)
+        except Exception:
+            pass
 
     def _record(
         self,
         on_volume: Optional[Callable[[float], None]],
+        on_partial: Optional[Callable[[str], None]],
         max_duration: float,
     ) -> list[bytes]:
         from client.voice.audio_utils import get_input_device_index, get_device_name
@@ -98,57 +124,75 @@ class GroqSTT:
         print(f"[STT] Recording... (Device: {name})")
 
         stream = None
-        try:
-            for s_rate in [SAMPLE_RATE, 44100, 48000]:
+        for s_rate in [SAMPLE_RATE, 44100, 48000]:
+            if stream: break
+            for channels in [1, 2]:
                 try:
                     current_chunk = int(CHUNK * (s_rate / SAMPLE_RATE))
                     stream = sd.InputStream(
                         samplerate=s_rate,
                         device=idx,
-                        channels=1,
+                        channels=channels,
                         dtype='int16',
+                        callback=self._callback,
                         blocksize=current_chunk
                     )
                     stream.start()
-                    print(f"[STT] Mic opened: {s_rate}Hz")
+                    print(f"[STT] Successfully opened {s_rate}Hz {channels}-channel stream (Callback Mode).")
                     break
                 except Exception:
                     continue
-            
-            if not stream:
-                print("[STT] CRITICAL: Could not open InputStream with any rate.")
-                return []
+        
+        if not stream:
+            print("[STT] CRITICAL: Could not open InputStream with any rate.")
+            return []
 
-            actual_rate = stream.samplerate
-            read_size   = int(CHUNK * (actual_rate / SAMPLE_RATE))
+        actual_rate = stream.samplerate
+        actual_chan = stream.channels
+        
+        audio_frames   = []
+        silence_count  = 0
+        speech_count   = 0
+        last_partial_len = 0
+        max_chunks     = int(actual_rate / CHUNK * max_duration)
 
-            frames         = []
-            silence_count  = 0
-            speech_count   = 0
-            max_chunks     = int(actual_rate / CHUNK * max_duration)
-
+        try:
             for _ in range(max_chunks):
                 try:
-                    raw_data, _ = stream.read(read_size)
-                except Exception as e:
-                    print(f"[STT] Read error: {e}")
-                    break
+                    raw_data = self._queue.get(timeout=1.0)
+                except queue.Empty:
+                    continue
+                
+                # 1. Downsample channels to Mono if needed
+                if actual_chan > 1:
+                    audio_mono = np.mean(raw_data, axis=1).astype(np.int16)
+                else:
+                    audio_mono = raw_data.flatten()
 
-                audio_raw = raw_data.flatten()
-
-                # Resample -> 16k
+                # 2. Resample to 16kHz if needed
                 if actual_rate != SAMPLE_RATE:
                     from scipy import signal
-                    audio_16k = signal.resample(audio_raw, CHUNK).astype(np.int16)
-                    frames.append(audio_16k.tobytes())
-                    audio = audio_16k.astype(np.float32)
+                    target_len = int(len(audio_mono) * (SAMPLE_RATE / actual_rate))
+                    audio_16k = signal.resample(audio_mono, target_len).astype(np.int16)
+                    audio_frames.append(audio_16k.tobytes())
+                    audio_float = audio_16k.astype(np.float32)
                 else:
-                    frames.append(audio_raw.tobytes())
-                    audio = audio_raw.astype(np.float32)
+                    audio_frames.append(audio_mono.tobytes())
+                    audio_float = audio_mono.astype(np.float32)
 
-                rms = int(np.sqrt(np.mean(audio ** 2)))
+                rms = int(np.sqrt(np.mean(audio_float ** 2)))
                 if on_volume: 
                     on_volume(rms)
+
+                # Trigger background transcription chunk every ~1.5 seconds of audio
+                if on_partial and len(audio_frames) - last_partial_len > (SAMPLE_RATE / CHUNK * 1.5):
+                    last_partial_len = len(audio_frames)
+                    if speech_count >= MIN_SPEECH_CHUNKS:
+                        threading.Thread(
+                            target=self._transcribe_background,
+                            args=(audio_frames.copy(), on_partial),
+                            daemon=True
+                        ).start()
 
                 if rms < SILENCE_THRESHOLD:
                     silence_count += 1
@@ -157,11 +201,15 @@ class GroqSTT:
                     speech_count += 1
 
                 if speech_count >= MIN_SPEECH_CHUNKS and silence_count >= MAX_SILENCE_CHUNKS:
+                    print(f"[STT] Done: Speech heard ({speech_count}) -> Silence reached ({silence_count})")
                     break
-
+        except Exception as e:
+            print(f"[STT] Recording error: {e}")
         finally:
-            if stream is not None and stream.active:
+            if stream is not None:
                 stream.stop()
                 stream.close()
 
-        return frames
+        if speech_count >= MIN_SPEECH_CHUNKS:
+            return audio_frames
+        return []

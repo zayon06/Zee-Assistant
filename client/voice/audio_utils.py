@@ -29,8 +29,12 @@ def get_input_device_index() -> int:
                 name = info.get('name', '').lower()
                 if "external" in name and "microphone" in name:
                     external_idx = i
-                elif "array" in name or "internal" in name or "microphone" in name:
-                    if internal_idx == -1: # prefer First internal match
+                elif "array" in name or "internal" in name:
+                    if internal_idx == -1: 
+                        internal_idx = i
+                elif "microphone" in name:
+                    # Generic mic, only use if we haven't found an array/internal yet
+                    if internal_idx == -1:
                         internal_idx = i
 
         if external_idx != -1:
