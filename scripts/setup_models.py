@@ -18,7 +18,7 @@ def setup_models():
     # 1.5. Essential pre-processing models for openwakeword
     for model in ["melspectrogram.onnx", "embedding_model.onnx"]:
         path = wake_dir / model
-        url = f"https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/{model}"
+        url = f"https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/{model}
         if not path.exists():
             print(f"[Setup] Downloading {model}: {url}")
             urllib.request.urlretrieve(url, path)
