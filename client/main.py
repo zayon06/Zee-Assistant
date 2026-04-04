@@ -118,7 +118,15 @@ def voice_agent(hud, ws_client, stop_event: threading.Event):
             except Exception:
                 return False
 
-        text = stt.transcribe(on_partial=on_partial, on_volume=on_volume, is_active=is_active_callback)
+        def is_muted_callback() -> bool:
+            return getattr(hud, 'is_speaking', False)
+
+        text = stt.transcribe(
+            on_partial=on_partial, 
+            on_volume=on_volume, 
+            is_active=is_active_callback,
+            is_muted=is_muted_callback
+        )
         clean_text = text.strip()
 
         if not clean_text:
@@ -194,7 +202,9 @@ def main():
     def on_done(final: str):
         hud.safe_end_stream()
         hud.safe_set_state("Speaking")
+        hud.is_speaking = True
         tts.synthesize(final)
+        hud.is_speaking = False
         hud.safe_set_state("Listening")
 
     def on_error(msg: str):

@@ -10,6 +10,9 @@ ZeeHUD v2 — Enhanced CustomTkinter Interface
 import math
 import threading
 import tkinter as tk
+from tkinter import filedialog
+import os
+import base64
 from typing import Callable, Optional
 
 import customtkinter as ctk
@@ -57,9 +60,14 @@ class ZeeHUD(ctk.CTk):
         self._state       = "Idle"
         self.screen_mode  = False
         self.voice_paused = False
+        self.trust_mode   = False   # Trust Mode: True = Son runs shell without confirmation
         self._angle       = 0.0
         self._pulse       = 68.0
         self._pulse_dir   = 1
+
+        # Image Attachment State
+        self._attached_image_b64: Optional[str] = None
+        self._attached_image_name: Optional[str] = None
 
         # Drag / resize
         self._dx = self._dy = 0
@@ -144,13 +152,13 @@ class ZeeHUD(ctk.CTk):
         )
         self.screen_btn.pack(side="left", padx=(0, 6))
 
-        self.voice_btn = ctk.CTkButton(
-            mode_row, text="🎙  VOICE ON", width=110, height=28,
-            fg_color=TEAL_DIM, hover_color="#005046",
-            text_color=TEXT_DIM, corner_radius=8,
-            font=("Segoe UI", 10, "bold"), command=self.toggle_voice
+        self.trust_btn = ctk.CTkButton(
+            mode_row, text="⚡ TRUST OFF", width=110, height=28,
+            fg_color="#3D1010", hover_color="#5A1A1A",
+            text_color="#FF6060", corner_radius=8,
+            font=("Segoe UI", 10, "bold"), command=self.toggle_trust
         )
-        self.voice_btn.pack(side="left")
+        self.trust_btn.pack(side="left")
 
         # Chat scroll area
         self.chat_frame = ctk.CTkScrollableFrame(
@@ -182,9 +190,25 @@ class ZeeHUD(ctk.CTk):
             font=("Segoe UI", 12),
         )
         self.input_box.pack(
-            side="left", fill="x", expand=True, padx=(12, 6), pady=6
+            side="left", fill="both", expand=True, padx=(12, 0)
         )
         self.input_box.bind("<Return>", self._on_enter)
+
+        # Image Attach Button
+        self.image_btn = ctk.CTkButton(
+            input_row, text="📷", width=36, height=36,
+            fg_color="transparent", hover_color="#1C2030",
+            text_color=TEXT_DIM, font=("Segoe UI", 16),
+            command=self._select_image
+        )
+        self.image_btn.pack(side="left", padx=4)
+
+        # Image Badge (hidden by default)
+        self.image_badge = ctk.CTkLabel(
+            input_row, text="", font=("Segoe UI", 10, "bold"),
+            text_color=AMBER, fg_color="#2A2000", corner_radius=6
+        )
+        # We'll pack/unpack it dynamically
 
         self.mic_lbl = ctk.CTkLabel(
             input_row, text="●", width=36, height=36,
@@ -255,10 +279,8 @@ class ZeeHUD(ctk.CTk):
         self.status_lbl.configure(text_color=color)
 
         if state == "Listening":
-            self.voice_btn.configure(fg_color=GREEN, text_color=DARK_BG)
             self.mic_lbl.configure(text_color=TEAL_DIM, fg_color="transparent")
         else:
-            self.voice_btn.configure(fg_color=TEAL_DIM, text_color=TEXT_DIM)
             self.mic_lbl.configure(text_color=TEXT_DIM, fg_color="transparent")
 
     def safe_set_input_text(self, text: str):
@@ -280,37 +302,53 @@ class ZeeHUD(ctk.CTk):
             f"Screen Analysis {'ON — Son sees every message' if on else 'OFF'}."
         )
 
-    def toggle_voice(self):
-        self.voice_paused = not self.voice_paused
-        if self.on_voice_toggle:
-            self.on_voice_toggle()
-        paused = self.voice_paused
-        self.voice_btn.configure(
-            text="🎙  VOICE OFF" if paused else "🎙  VOICE ON",
-            fg_color=RED_HOVER if paused else TEAL_DIM,
-            text_color=TEXT_PRI if paused else TEXT_DIM,
+    def toggle_trust(self):
+        self.trust_mode = not self.trust_mode
+        on = self.trust_mode
+        self.trust_btn.configure(
+            text="⚡ TRUST ON" if on else "⚡ TRUST OFF",
+            fg_color=AMBER if on else "#3D1010",
+            hover_color="#8A5A00" if on else "#5A1A1A",
+            text_color=DARK_BG if on else "#FF6060",
+        )
+        self.safe_add_system(
+            "⚡ Trust Mode ON — Son will execute shell commands automatically."
+            if on else
+            "🛡 Trust Mode OFF — Son will ask before running any shell command."
         )
 
     def add_message(self, speaker: str, text: str, role: str = "zee"):
         clean = text.strip()
-        if not clean:
+        # Only skip if both speaker is a badge-only (⚙) and text is empty
+        if not clean and not speaker.startswith("⚙"):
+            return
+        if not clean and speaker.startswith("⚙"):
+            # Render a compact badge-only row with no text body
+            row = ctk.CTkFrame(self.chat_frame, fg_color="transparent")
+            row.pack(fill="x", pady=(4, 0))
+            COLOR = {"zee": TEAL, "you": GREEN, "system": TEXT_DIM, "action": AMBER}
+            color = COLOR.get(role, TEXT_DIM)
+            ctk.CTkLabel(
+                row, text=speaker.upper(), font=("Segoe UI", 10, "bold"), text_color=color
+            ).pack(anchor="w", padx=8)
+            self.chat_frame._parent_canvas.yview_moveto(1.0)
             return
 
         COLOR = {"zee": TEAL, "you": GREEN, "system": TEXT_DIM, "action": AMBER}
         color = COLOR.get(role, TEXT_DIM)
 
         row = ctk.CTkFrame(self.chat_frame, fg_color="transparent")
-        row.pack(fill="x", pady=(4, 0))
+        row.pack(fill="x", pady=(8, 2))
 
         ctk.CTkLabel(
-            row, text=speaker, font=("Segoe UI", 9, "bold"), text_color=color
-        ).pack(anchor="w", padx=4)
+            row, text=speaker.upper(), font=("Segoe UI", 10, "bold"), text_color=color
+        ).pack(anchor="w", padx=8)
 
         msg_lbl = ctk.CTkLabel(
-            row, text=clean, font=("Segoe UI", 11),
-            text_color=TEXT_PRI, wraplength=360, justify="left", anchor="w"
+            row, text=clean, font=("Segoe UI", 13),
+            text_color=TEXT_PRI, wraplength=340, justify="left", anchor="w"
         )
-        msg_lbl.pack(anchor="w", padx=4)
+        msg_lbl.pack(anchor="w", padx=8, pady=(2, 0))
 
         # Click to copy
         msg_lbl.bind("<Button-1>", lambda _: self._copy(clean))
@@ -383,43 +421,88 @@ class ZeeHUD(ctk.CTk):
             fg_color="transparent"
         )
 
-    def safe_add_action(self, tag: str, detail):
-        """Format and show an action line."""
+    def safe_add_action(self, tag: str, detail, show: bool = True):
+        """Format and show an action line in the chat."""
+        if not show:
+            # Just show the icon badge, no content
+            self.after(0, self.add_message, f"⚙ {tag}", "", "action")
+            return
+
         clean_detail = detail
         if isinstance(detail, dict):
-            if tag == "SEARCH" and "query" in detail:
-                 clean_detail = detail["query"]
-            elif len(detail) == 1:
+            if len(detail) == 1:
                 clean_detail = list(detail.values())[0]
             else:
                 clean_detail = str(detail)
-        
+
         self.after(0, self.add_message, f"⚙ {tag}", str(clean_detail), "action")
+
+    # ── Image Attachment ──────────────────────────────────────────────────────
+
+    def _select_image(self):
+        """Open file dialog to pick an image."""
+        path = filedialog.askopenfilename(
+            title="Attach Image for Son",
+            filetypes=[("Image Files", "*.png *.jpg *.jpeg *.webp *.bmp")]
+        )
+        if not path:
+            return
+
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+                self._attached_image_b64 = base64.b64encode(data).decode("utf-8")
+                self._attached_image_name = os.path.basename(path)
+                
+            # Update UI badge
+            name = self._attached_image_name
+            if len(name) > 12:
+                name = name[:10] + "…"
+            self.image_badge.configure(text=f" 📎 {name} ")
+            self.image_badge.pack(side="left", padx=(0, 10))
+            self.image_btn.configure(text_color=AMBER)
+        except Exception as e:
+            self.safe_add_system(f"❌ Failed to load image: {e}")
+
+    def _clear_image(self):
+        """Reset the attachment state."""
+        self._attached_image_b64 = None
+        self._attached_image_name = None
+        self.image_badge.pack_forget()
+        self.image_btn.configure(text_color=TEXT_DIM)
+
+    # ── Clipboard ─────────────────────────────────────────────────────────────
+
+    def _copy(self, text: str):
+        """Native Tkinter clipboard copy."""
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(text)
+            self.update() # ensure it persists
+            self.safe_add_system("✓ Copied to clipboard.")
+        except Exception as e:
+            self.safe_add_system(f"❌ Copy failed: {e}")
 
     # ── Input ─────────────────────────────────────────────────────────────────
 
     def _on_enter(self, _event):
         text = self.input_box.get().strip()
-        if not text:
+        if not text and not self._attached_image_b64:
             return
+            
+        img = self._attached_image_b64
         self.input_box.delete(0, "end")
         self.add_message("YOU", text, "you")
+        
         if self.on_text_submit:
             threading.Thread(
                 target=self.on_text_submit,
-                args=(text, self.screen_mode),
+                args=(text, self.screen_mode, img),
                 daemon=True
             ).start()
+        
+        self._clear_image()
 
-    # ── Clipboard ─────────────────────────────────────────────────────────────
-
-    def _copy(self, text: str):
-        try:
-            import pyperclip
-            pyperclip.copy(text)
-            self.safe_add_system("Copied to clipboard.")
-        except Exception:
-            pass
 
     # ── Vision flash ──────────────────────────────────────────────────────────
 
