@@ -10,6 +10,7 @@ import time
 import re
 import keyboard
 
+from typing import Optional
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -92,29 +93,23 @@ def voice_agent(hud, ws_client, stop_event: threading.Event):
     def on_volume(rms: float):
         hud.safe_animate_mic(rms)
 
-    # Wake words (soundalikes included since Whisper sometimes guesses these for 'Son')
-    WAKE_WORDS = r'^(son|sun|zion|zone|sam|song|sum|some)[\s\,\.\?!]'
-
     while not stop_event.is_set():
         try:
-            # Peek if F5 is pressed right now (in case it starts while paused)
-            current_ptt = keyboard.is_pressed('f5')
+            current_ptt = keyboard.is_pressed('right shift')
         except Exception:
             current_ptt = False
 
-        if hud.voice_paused and not current_ptt:
-            time.sleep(0.1)
+        if not current_ptt:
+            if hud._state == "Listening":
+                hud.safe_set_state("Idle")
+            time.sleep(0.05)
             continue
 
         hud.safe_set_state("Listening")
 
-        ptt_used = [False]
         def is_active_callback() -> bool:
             try:
-                state = keyboard.is_pressed('f5')
-                if state:
-                    ptt_used[0] = True
-                return state
+                return keyboard.is_pressed('right shift')
             except Exception:
                 return False
 
@@ -132,43 +127,21 @@ def voice_agent(hud, ws_client, stop_event: threading.Event):
         if not clean_text:
             continue
 
-        # Check if the text starts with the Wake Word
-        match = re.search(WAKE_WORDS, clean_text, re.IGNORECASE)
-        
-        # Override wake word check if F5 was used
-        if ptt_used[0]:
-            command = clean_text[match.end():].strip() if match else clean_text
-            if command:
-                hud.safe_set_input_text("") # Clear live typing
-                hud.safe_add_message("YOU (F5)", clean_text, "you")
-                _send_and_speak(command, hud, ws_client, tts)
-            continue
-
-        if match:
-            # Wake word detected! Extract the actual command by removing the wake word
-            command = clean_text[match.end():].strip()
-            
-            # If the user just said "Son" and paused, we still want to acknowledge.
-            if not command:
-                command = "Hello."
-
-            hud.safe_set_input_text("") # Clear live typing
-            hud.safe_add_message("YOU", clean_text, "you")
-            _send_and_speak(command, hud, ws_client, tts)
-        else:
-            # It heard speech but it wasn't for Son. Ignore it.
-            hud.safe_set_input_text("") # Clear partials
-            hud.safe_set_state("Listening")
+        hud.safe_set_input_text("") # Clear live typing
+        hud.safe_add_message("YOU (Right Shift)", clean_text, "you")
+        _send_and_speak(clean_text, hud, ws_client, tts, None)
 
 
-def _send_and_speak(text: str, hud, ws_client, tts):
+def _send_and_speak(text: str, hud, ws_client, tts, image_b64: Optional[str] = None):
     """Send user text over WebSocket; TTS will speak the final response."""
     hud.safe_set_state("Thinking")
     hud.safe_start_stream()
     ws_client.send({
         "type":        "chat",
         "text":        text,
+        "image":       image_b64,
         "screen_mode": hud.screen_mode,
+        "trust_mode":  getattr(hud, "trust_mode", False),
     })
     # TTS is triggered by on_done callback registered in main()
 
@@ -193,9 +166,21 @@ def main():
         hud.safe_append_token(token)
 
     def on_action(msg: dict):
-        tag    = msg.get("tag", "")
-        detail = msg.get("args", msg.get("content", ""))
-        hud.safe_add_action(tag, detail)
+        tag     = msg.get("tag", "")
+        msg_type = msg.get("type", "action")  # "action" = outgoing query, "result" = incoming data
+
+        if msg_type == "result":
+            # Show the actual result content
+            content = msg.get("content", "")
+            if tag == "SEARCH" and content:
+                hud.safe_add_action(f"SEARCH RESULTS", content, show=True)
+            elif content and content != "[image attached]":
+                hud.safe_add_action(tag, content, show=True)
+        else:
+            # Outgoing query — hide query detail for SEARCH, show for others
+            detail = msg.get("args", msg.get("content", ""))
+            hud.safe_add_action(tag, detail, show=(tag != "SEARCH"))
+
         if tag == "LOOK":
             hud.after(0, hud.trigger_vision_flash)
 
@@ -226,10 +211,8 @@ def main():
     ws.start()
 
     # Text input callback
-    def on_text_submit(text: str, screen_mode: bool):
-        hud.safe_set_state("Thinking")
-        hud.safe_start_stream()
-        ws.send({"type": "chat", "text": text, "screen_mode": screen_mode})
+    def on_text_submit(text: str, screen_mode: bool, image_b64: Optional[str] = None):
+        _send_and_speak(text, hud, ws, tts, image_b64)
 
     hud.on_text_submit  = on_text_submit
     hud.on_voice_toggle = lambda: None  # placeholder

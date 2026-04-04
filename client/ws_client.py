@@ -63,22 +63,27 @@ class ZeeWSClient:
         while True:
             try:
                 async with websockets.connect(
-                    self.url, ping_interval=20, ping_timeout=10
+                    self.url,
+                    ping_interval=None,
+                    ping_timeout=None,
+                    close_timeout=5,
                 ) as ws:
                     self._connected = True
                     backoff = 1.0
                     if self.on_connect:
                         self.on_connect()
+                    
                     await asyncio.gather(
                         self._recv_loop(ws),
-                        self._send_loop(ws),
+                        self._send_loop(ws)
                     )
             except Exception as e:
                 self._connected = False
-                if self.on_error:
-                    self.on_error(f"Connection lost — retrying in {backoff:.0f}s ({e})")
+                if not isinstance(e, websockets.exceptions.ConnectionClosedOK):
+                    if self.on_error:
+                        self.on_error(f"Connection lost — retrying in {backoff:.0f}s ({e})")
                 await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, 30)
+                backoff = min(backoff * 2, 15)
 
     async def _recv_loop(self, ws):
         async for raw in ws:
@@ -103,3 +108,6 @@ class ZeeWSClient:
                 await ws.send(json.dumps(payload))
             except Exception as e:
                 print(f"[WSClient] Send error: {e}")
+                break  # exit cleanly so _connect_loop triggers reconnect
+
+
