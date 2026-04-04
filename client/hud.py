@@ -51,7 +51,7 @@ class ZeeHUD(ctk.CTk):
         self.resizable(True, True)
         self.overrideredirect(True)
         self.attributes("-topmost", True)
-        self.attributes("-alpha", 0.94)
+        self.attributes("-alpha", 0.88)
         self.wm_attributes("-transparentcolor", DARK_BG)
         self.configure(fg_color=DARK_BG)
         self.title("Son — Noiz Technologies")
@@ -64,6 +64,7 @@ class ZeeHUD(ctk.CTk):
         self._angle       = 0.0
         self._pulse       = 68.0
         self._pulse_dir   = 1
+        self._zen_mode    = False   # Zen Mode: Minimal status only
 
         # Image Attachment State
         self._attached_image_b64: Optional[str] = None
@@ -115,6 +116,16 @@ class ZeeHUD(ctk.CTk):
 
         ctrl = ctk.CTkFrame(self.title_bar, fg_color="transparent")
         ctrl.pack(side="right", padx=(0, 8))
+        
+        # Zen Mode Toggle
+        self.zen_btn = ctk.CTkButton(
+            ctrl, text="🧘", width=30, height=22,
+            fg_color="transparent", hover_color="#1C2030",
+            text_color=TEXT_DIM, font=("Segoe UI", 13), 
+            command=self.toggle_zen_mode
+        )
+        self.zen_btn.pack(side="left", padx=2)
+
         ctk.CTkButton(
             ctrl, text="─", width=30, height=22,
             fg_color="transparent", hover_color="#1C2030",
@@ -130,22 +141,22 @@ class ZeeHUD(ctk.CTk):
         self.canvas = tk.Canvas(
             self, width=180, height=180, bg=DARK_BG, highlightthickness=0
         )
-        self.canvas.pack(pady=(12, 2))
+        self.canvas.pack(pady=(12, 12)) # more space in Zen mode
 
         # Status label
         self.status_var = tk.StringVar(value="● IDLE")
         self.status_lbl = ctk.CTkLabel(
             self, textvariable=self.status_var,
-            font=("Courier New", 10, "bold"), text_color=TEXT_DIM
+            font=("Courier New", 11, "bold"), text_color=TEXT_DIM
         )
-        self.status_lbl.pack()
+        self.status_lbl.pack(pady=(0, 12))
 
         # Mode toggles row
-        mode_row = ctk.CTkFrame(self, fg_color="transparent")
-        mode_row.pack(fill="x", padx=18, pady=(6, 0))
+        self.mode_row = ctk.CTkFrame(self, fg_color="transparent")
+        self.mode_row.pack(fill="x", padx=18, pady=(6, 0))
 
         self.screen_btn = ctk.CTkButton(
-            mode_row, text="👁  SCREEN", width=106, height=28,
+            self.mode_row, text="👁  SCREEN", width=106, height=28,
             fg_color=TEAL_DIM, hover_color="#005046",
             text_color=TEXT_DIM, corner_radius=8,
             font=("Segoe UI", 10, "bold"), command=self.toggle_screen
@@ -153,7 +164,7 @@ class ZeeHUD(ctk.CTk):
         self.screen_btn.pack(side="left", padx=(0, 6))
 
         self.trust_btn = ctk.CTkButton(
-            mode_row, text="⚡ TRUST OFF", width=110, height=28,
+            self.mode_row, text="⚡ TRUST OFF", width=110, height=28,
             fg_color="#3D1010", hover_color="#5A1A1A",
             text_color="#FF6060", corner_radius=8,
             font=("Segoe UI", 10, "bold"), command=self.toggle_trust
@@ -173,12 +184,12 @@ class ZeeHUD(ctk.CTk):
         self.chat_frame.pack(pady=(10, 6), padx=18, fill="both", expand=True)
 
         # Input bar
-        input_row = ctk.CTkFrame(
+        self.input_row = ctk.CTkFrame(
             self, fg_color="#141820", corner_radius=12,
             border_width=1, border_color=BORDER, height=50
         )
-        input_row.pack(fill="x", padx=18, pady=(0, 14))
-        input_row.pack_propagate(False)
+        self.input_row.pack(fill="x", padx=18, pady=(0, 14))
+        self.input_row.pack_propagate(False)
 
         self.input_box = ctk.CTkEntry(
             input_row,
@@ -236,6 +247,28 @@ class ZeeHUD(ctk.CTk):
         handle.bind("<B1-Motion>",     self._resize_move)
 
     # ── Window controls ───────────────────────────────────────────────────────
+
+    def toggle_zen_mode(self):
+        """Toggle between full chat and minimalist status."""
+        self._zen_mode = not self._zen_mode
+        
+        if self._zen_mode:
+            self.mode_row.pack_forget()
+            self.chat_frame.pack_forget()
+            self.input_row.pack_forget()
+            self.zen_btn.configure(text_color=TEAL)
+            
+            # Minimize window size for Zen mode
+            self.geometry(f"{self.MIN_W}x280")
+        else:
+            # Restore UI
+            self.mode_row.pack(fill="x", padx=18, pady=(6, 0))
+            self.chat_frame.pack(pady=(10, 6), padx=18, fill="both", expand=True)
+            self.input_row.pack(fill="x", padx=18, pady=(0, 14))
+            self.zen_btn.configure(text_color=TEXT_DIM)
+            
+            # Restore standard size
+            self.geometry(f"{self.MIN_W}x{self.MIN_H}")
 
     def _drag_start(self, e):
         self._dx = e.x_root - self.winfo_x()
