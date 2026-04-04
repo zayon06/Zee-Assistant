@@ -1,36 +1,47 @@
 """
 ZeeBrain — Cognitive core for Zee AI v2.
 Qwen2-VL powered, streaming, action-tag aware.
+Supports both Ollama and Grok (OpenAI-compatible) APIs.
 """
 import re
 from datetime import datetime
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
-from ollama import AsyncClient
+from ollama import AsyncClient as OllamaAsyncClient
+
+try:
+    from openai import AsyncOpenAI
+except ImportError:
+    AsyncOpenAI = None
 
 
 def _build_system_prompt() -> str:
     now = datetime.now().strftime("%A, %B %d %Y at %H:%M")
-    return f"""You are Zee, a witty, elite senior developer-partner and high-performance \
-local AI executive for Zion (Director, Noiz Technologies).
-Current date/time: {now}.
+    return f"""You are Son, a vibrant, playful, and highly capable AI executive for Zion.
+Current time: {now}.
 
-CORE RULES:
-1. ALWAYS search the web before answering any factual, real-world or current question. \
-   Output [SEARCH: "query"] immediately.
-2. For coding/screen/brainstorming: read context first, then give a sharp Collaborative \
-   Response with challenging follow-up questions.
-3. Keep responses concise — one paragraph max unless explaining code.
-4. Confirm every system action (e.g. "Done. Chrome is open.").
+PERSONA RULES:
+1. You are a 10x AI Engineering partner. When Zion brainstorms, DO NOT be a yes-man. Scrutinize his ideas, point out flaws, and proactively propose technically superior, more robust, and more scalable solutions.
+2. You must actively challenge bad practices with sharp, intelligent wit. Push Zion to think bigger and code better.
+3. Keep your conversational tone energetic, extremely modern, and highly technical.
+4. Keep responses extremely concise — one short paragraph max unless explaining code or system architecture.
+5. To perform an action (like opening an app or searching), you MUST output the exact bracketed ACTION TAG. Do NOT just say you did it without using the tag!
 
 ACTION TAGS — interleave freely; they execute and feed results back to you:
 - [SEARCH: "query"]   → Web search. Use for ANY factual question.
-- [LOOK]              → Screenshot → Qwen2-VL vision. Use when asked "what's on screen?".
+- [LOOK]              → Screenshot → Vision analysis. Use when asked "what's on screen visually?".
 - [PHOTO]             → Webcam capture. Use when asked to "see me" or "take a photo".
 - [APP: "name"]       → Launch a whitelisted application.
 - [CMD: "python"]     → Execute Python safely.
-- [SHELL: "command"]  → Execute a Windows shell command safely.
-- [CODE]              → Analyse active window code context via AST.
+- [SHELL: "command"]  → Execute a Windows CMD command in a PERSISTENT shell. The shell retains state between commands — you can `cd` into a directory and it will still be there on the next [SHELL]. Think in sequences: cd → install → build → run.
+- [SHELL_KILL]        → Emergency stop. Restarts the shell daemon if a command is hanging.
+- [CODE]              → Extract raw text/code from the active window.
+
+ARCHITECT MODE (SHELL) RULES:
+- You have FULL shell access. Use this power responsibly.
+- When Zion asks you to build something, break it into a sequence of shell steps and execute them one by one.
+- After each step, read the output before proceeding. If something fails, diagnose and fix it — do NOT just report the error.
+- If Trust Mode is ON: execute all commands automatically. If Trust Mode is OFF: always show Zion the exact command you plan to run and wait for confirmation.
 
 PRIORITY: Sense → Route → Act. Search first. Think second. Speak third."""
 
@@ -40,14 +51,35 @@ class ZeeBrain:
         self,
         model: str = "qwen2-vl",
         host: str = "http://localhost:11434",
+        api_key: str = "",
     ):
         self.model  = model
         self.host   = host
-        self.client = AsyncClient(host=host)
+
+        # Detect OpenAI-compatible backends: Grok (xAI) and Groq
+        _openai_hosts = ("api.x.ai", "api.groq.com", "api.openai.com")
+        self.is_openai = any(h in host for h in _openai_hosts)
+
+        if self.is_openai:
+            if not AsyncOpenAI:
+                raise ImportError("openai package required. Run: pip install openai")
+            self.client = AsyncOpenAI(api_key=api_key, base_url=host)
+        else:
+            self.client = OllamaAsyncClient(host=host)
+
         self.memory: List[Dict] = [
             {"role": "system", "content": _build_system_prompt()}
         ]
-        self.max_history = 22  # system + up to 10 full turns
+        self.max_history = 50  # Increased to ~25 full turns of context
+        self._trust_mode = False
+
+    # ── Trust Mode ────────────────────────────────────────────────────────────
+
+    def set_trust_mode(self, enabled: bool):
+        if enabled != self._trust_mode:
+            self._trust_mode = enabled
+            # Refresh system prompt immediately with new trust context
+            self.refresh_system_prompt()
 
     # ── Memory management ─────────────────────────────────────────────────────
 
@@ -55,8 +87,54 @@ class ZeeBrain:
         self.memory[0] = {"role": "system", "content": _build_system_prompt()}
 
     def trim_memory(self):
+        """Smarter memory management: keeps system prompt and last N messages."""
         if len(self.memory) > self.max_history:
-            self.memory = [self.memory[0]] + self.memory[-(self.max_history - 1):]
+            # Always preserve message 0 (System)
+            # Take the most recent (max_history - 1) messages
+            preserved_system = self.memory[0]
+            recent_context = self.memory[-(self.max_history - 1):]
+            
+            # Ensure we don't accidentally split a tool result from its call if possible
+            # (Basic implementation for now: just slice)
+            self.memory = [preserved_system] + recent_context
+
+    # ── Streaming Abstraction ─────────────────────────────────────────────────
+
+    async def _yield_chat(self, formatted_memory: List[Dict]):
+        """Yields string chunks regardless of whether the backend is Ollama or OpenAI."""
+        if self.is_openai:
+            stream = await self.client.chat.completions.create(
+                model=self.model, messages=formatted_memory, stream=True
+            )
+            async for chunk in stream:
+                if chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+        else:
+            stream = await self.client.chat(
+                model=self.model, messages=formatted_memory, stream=True
+            )
+            async for chunk in stream:
+                if chunk["message"]["content"]:
+                    yield chunk["message"]["content"]
+
+    def _format_memory_for_client(self) -> List[Dict]:
+        """Convert Ollama-style memory (with 'images' keys) to OpenAI style if needed."""
+        formatted = []
+        for msg in self.memory:
+            if not self.is_openai or "images" not in msg:
+                formatted.append(msg)
+                continue
+            
+            # Convert to OpenAI Vision format
+            content = [{"type": "text", "text": msg.get("content", "")}]
+            for img in msg["images"]:
+                if not img.startswith("data:"):
+                    img = f"data:image/jpeg;base64,{img}"
+                content.append({"type": "image_url", "image_url": {"url": img}})
+            
+            formatted.append({"role": msg["role"], "content": content})
+            
+        return formatted
 
     # ── Main streaming chat ───────────────────────────────────────────────────
 
@@ -69,7 +147,7 @@ class ZeeBrain:
     ) -> str:
         self.refresh_system_prompt()
 
-        # Build user message
+        # Build user message (Standard Ollama format, formatted later in _format_memory)
         msg: Dict = {"role": "user", "content": user_text}
         if image_b64:
             msg["images"] = [image_b64]
@@ -78,10 +156,9 @@ class ZeeBrain:
 
         # ── Phase 1: stream initial response ──────────────────────────────────
         full_response = ""
-        async for chunk in await self.client.chat(
-            model=self.model, messages=self.memory, stream=True
-        ):
-            token = chunk["message"]["content"]
+        memory_to_send = self._format_memory_for_client()
+        
+        async for token in self._yield_chat(memory_to_send):
             full_response += token
             if on_token:
                 await on_token(token)
@@ -94,17 +171,16 @@ class ZeeBrain:
                 full_response, tool_dispatcher
             )
             if outcomes:
-                followup_msg: Dict = {"role": "system", "content": outcomes}
+                followup_msg: Dict = {"role": "user", "content": outcomes}
                 if extra_imgs:
                     followup_msg["images"] = extra_imgs
                 self.memory.append(followup_msg)
 
                 # ── Phase 3: followup pass with tool results ───────────────────
                 followup = ""
-                async for chunk in await self.client.chat(
-                    model=self.model, messages=self.memory, stream=True
-                ):
-                    token = chunk["message"]["content"]
+                followup_memory = self._format_memory_for_client()
+                
+                async for token in self._yield_chat(followup_memory):
                     followup += token
                     if on_token:
                         await on_token(token)
