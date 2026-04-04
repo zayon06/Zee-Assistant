@@ -18,15 +18,12 @@ load_dotenv()
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 ZEE_MODEL   = os.getenv("ZEE_MODEL",   "qwen2-vl")
-SEARXNG_URL = os.getenv("SEARXNG_URL", "http://localhost:8888")
+XAI_API_KEY = os.getenv("XAI_API_KEY", "")
 WS_PORT     = int(os.getenv("ZEE_WS_PORT", "8765"))
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Update search service URL from env at startup
-    from server.search import search_service
-    search_service.searxng_url = SEARXNG_URL
     print(f"[Zee Server] Ready  model={ZEE_MODEL}  host={OLLAMA_HOST}")
     yield
     print("[Zee Server] Shutdown.")
@@ -48,7 +45,6 @@ async def health():
         "status":      "online",
         "model":       ZEE_MODEL,
         "ollama_host": OLLAMA_HOST,
-        "searxng":     SEARXNG_URL,
     }
 
 
@@ -59,7 +55,7 @@ async def websocket_chat(ws: WebSocket):
     from server.brain import ZeeBrain
     from server.tools import dispatch
 
-    brain = ZeeBrain(model=ZEE_MODEL, host=OLLAMA_HOST)
+    brain = ZeeBrain(model=ZEE_MODEL, host=OLLAMA_HOST, api_key=XAI_API_KEY)
     print("[WS] Client connected.")
 
     try:
@@ -72,17 +68,21 @@ async def websocket_chat(ws: WebSocket):
                 continue
 
             user_text   = payload.get("text", "").strip()
-            image_b64   = payload.get("image")          # optional pre-captured b64
+            image_b64   = payload.get("image")
             screen_mode = payload.get("screen_mode", False)
+            trust_mode  = payload.get("trust_mode", False)
 
             if not user_text:
                 continue
+
+            # Sync trust mode into the brain's system prompt
+            brain.set_trust_mode(trust_mode)
 
             # Auto-capture screen if screen_mode and no image provided
             if screen_mode and not image_b64:
                 try:
                     from server.system_control import capture_screenshot_b64
-                    image_b64 = capture_screenshot_b64()
+                    image_b64 = await asyncio.to_thread(capture_screenshot_b64)
                     await ws.send_json({"type": "action", "tag": "LOOK",
                                         "status": "screen captured"})
                 except Exception as e:
