@@ -192,7 +192,7 @@ class ZeeHUD(ctk.CTk):
         self.input_row.pack_propagate(False)
 
         self.input_box = ctk.CTkEntry(
-            input_row,
+            self.input_row,
             placeholder_text="Say 'Hey Son' or type here…",
             fg_color="transparent",
             text_color=TEXT_PRI,
@@ -207,7 +207,7 @@ class ZeeHUD(ctk.CTk):
 
         # Image Attach Button
         self.image_btn = ctk.CTkButton(
-            input_row, text="📷", width=36, height=36,
+            self.input_row, text="📷", width=36, height=36,
             fg_color="transparent", hover_color="#1C2030",
             text_color=TEXT_DIM, font=("Segoe UI", 16),
             command=self._select_image
@@ -216,20 +216,20 @@ class ZeeHUD(ctk.CTk):
 
         # Image Badge (hidden by default)
         self.image_badge = ctk.CTkLabel(
-            input_row, text="", font=("Segoe UI", 10, "bold"),
+            self.input_row, text="", font=("Segoe UI", 10, "bold"),
             text_color=AMBER, fg_color="#2A2000", corner_radius=6
         )
         # We'll pack/unpack it dynamically
 
         self.mic_lbl = ctk.CTkLabel(
-            input_row, text="●", width=36, height=36,
+            self.input_row, text="●", width=36, height=36,
             fg_color="transparent", text_color=TEAL_DIM,
             corner_radius=18, font=("Segoe UI", 16)
         )
         self.mic_lbl.pack(side="right", padx=(0, 4), pady=6)
 
         send_btn = ctk.CTkButton(
-            input_row, text="↑", width=36, height=36,
+            self.input_row, text="↑", width=36, height=36,
             fg_color=TEAL_DIM, hover_color=TEAL,
             text_color=TEAL, corner_radius=10,
             font=("Segoe UI", 14, "bold"),

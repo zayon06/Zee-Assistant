@@ -7,6 +7,7 @@ import os
 import queue
 import wave
 import threading
+import re
 from typing import Callable, Optional
 
 import numpy as np
@@ -56,6 +57,7 @@ class GroqSTT:
         on_volume: Optional[Callable[[float], None]] = None,
         max_duration: float = MAX_DURATION_S,
         is_active: Optional[Callable[[], bool]] = None,
+        is_muted: Optional[Callable[[], bool]] = None,
     ) -> str:
         if not self._loaded and not self.load():
             return ""
@@ -64,7 +66,7 @@ class GroqSTT:
         with self._queue.mutex:
             self._queue.queue.clear()
 
-        frames = self._record(on_volume, on_partial, max_duration, is_active)
+        frames = self._record(on_volume, on_partial, max_duration, is_active, is_muted)
         if not frames:
             return ""
 
@@ -86,9 +88,15 @@ class GroqSTT:
             )
             text = str(res).strip()
             # Filter common Whisper hallucinations
-            rejects = ["Thanks for watching", "Subscribe", "amara.org", "Son."]
+            rejects = ["thanks for watching", "subscribe", "amara.org", "son."]
+            exact_rejects = [".", "thank you.", "thank you", "...", "yeah.", "excuse me.", "i don't know.", "i", "yeah"]
+            
+            if not re.search(r'[a-zA-Z0-9]', text):
+                return ""
+            if text.lower() in exact_rejects:
+                return ""
             for r in rejects:
-                if r.lower() in text.lower():
+                if r in text.lower():
                     return ""
             print(f"[STT] → {text!r}")
             return text
@@ -113,10 +121,13 @@ class GroqSTT:
             )
             text = str(res).strip()
             
-            rejects = ["Thanks for watching", "Subscribe", "amara.org", "Son."]
-            is_hallucination = any(r.lower() in text.lower() for r in rejects)
+            rejects = ["thanks for watching", "subscribe", "amara.org", "son."]
+            exact_rejects = [".", "thank you.", "thank you", "...", "yeah.", "excuse me.", "i don't know.", "i", "yeah"]
+            
+            is_hallucination = any(r in text.lower() for r in rejects) or (text.lower() in exact_rejects)
+            has_alnum = bool(re.search(r'[a-zA-Z0-9]', text))
 
-            if text and not is_hallucination:
+            if text and has_alnum and not is_hallucination:
                 print(f"[STT] Live: {text}")
                 on_partial(text)
         except Exception:
@@ -128,6 +139,7 @@ class GroqSTT:
         on_partial: Optional[Callable[[str], None]],
         max_duration: float,
         is_active: Optional[Callable[[], bool]] = None,
+        is_muted: Optional[Callable[[], bool]] = None,
     ) -> list[bytes]:
         from client.voice.audio_utils import get_input_device_index, get_device_name
         idx = get_input_device_index()
@@ -191,6 +203,15 @@ class GroqSTT:
                 else:
                     audio_frames.append(audio_mono.tobytes())
                     audio_float = audio_mono.astype(np.float32)
+
+                # 2. Mute logic (Echo Cancellation)
+                if is_muted is not None and is_muted():
+                    # The bot is currently speaking! Discard this audio frame.
+                    audio_frames.clear()
+                    speech_count = 0
+                    silence_count = 0
+                    last_partial_len = 0
+                    continue
 
                 rms = int(np.sqrt(np.mean(audio_float ** 2)))
                 if on_volume: 
