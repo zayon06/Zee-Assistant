@@ -9,7 +9,7 @@ import os
 import re
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 _pool = ThreadPoolExecutor(max_workers=4)
 
@@ -35,9 +35,9 @@ async def tool_look(args: Dict) -> Any:
             monitor = sct.monitors[1]
             raw = sct.grab(monitor)
             img = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
-            img.thumbnail((1280, 720), Image.LANCZOS)
+            img.thumbnail((1920, 1080), Image.LANCZOS)
             buf = io.BytesIO()
-            img.save(buf, format="JPEG", quality=82)
+            img.save(buf, format="JPEG", quality=75)
             return base64.b64encode(buf.getvalue()).decode()
 
     try:
@@ -67,97 +67,145 @@ async def tool_photo(args: Dict) -> Any:
         return f"Photo failed: {e}"
 
 
-# ── APP launch ────────────────────────────────────────────────────────────────
-APP_WHITELIST: Dict[str, str] = {
-    "chrome":           "chrome.exe",
-    "google chrome":    "chrome.exe",
-    "edge":             "msedge.exe",
+# ── APP launch (dynamic directory scan) ──────────────────────────────────────
+
+# Search roots — ordered by priority
+_APP_SEARCH_ROOTS = [
+    r"C:\Users\RMC\AppData\Local\Programs",
+    r"C:\Program Files",
+    r"C:\Program Files (x86)",
+]
+
+# In-session cache: name.lower() → full exe path
+_APP_CACHE: Dict[str, str] = {}
+
+# System commands that don't need a full path scan
+_SYSTEM_CMDS: Dict[str, str] = {
     "notepad":          "notepad.exe",
     "calculator":       "calc.exe",
     "explorer":         "explorer.exe",
     "terminal":         "wt.exe",
     "windows terminal": "wt.exe",
-    "vscode":           "code",
-    "vs code":          "code",
-    "spotify":          "spotify.exe",
-    "discord":          "discord.exe",
-    "slack":            "slack.exe",
-    "antigravity": (
-        r"C:\Users\RMC\AppData\Local\Programs\Antigravity\Antigravity.exe"
-    ),
+    "cmd":              "cmd.exe",
+    "task manager":     "taskmgr.exe",
+    "control panel":    "control.exe",
+    "paint":            "mspaint.exe",
+    "wordpad":          "wordpad.exe",
 }
+
+
+def _find_exe(name: str) -> Optional[str]:
+    """Search _APP_SEARCH_ROOTS for an exe matching 'name'. Returns full path or None."""
+    name_lower = name.lower().replace(" ", "")
+    best: Optional[str] = None
+    best_score = 0
+
+    for root in _APP_SEARCH_ROOTS:
+        if not os.path.isdir(root):
+            continue
+        for dirpath, dirnames, filenames in os.walk(root):
+            # Skip uninstaller and helper directories
+            dirnames[:] = [
+                d for d in dirnames
+                if "uninstall" not in d.lower() and "crashreport" not in d.lower()
+            ]
+            for fname in filenames:
+                if not fname.lower().endswith(".exe"):
+                    continue
+                if "uninstall" in fname.lower() or "update" in fname.lower():
+                    continue
+                stem = fname.lower().replace(".exe", "").replace(" ", "").replace("-", "").replace("_", "")
+                if stem == name_lower:
+                    return os.path.join(dirpath, fname)  # exact match
+                # Partial match scoring
+                if name_lower in stem or stem in name_lower:
+                    score = len(os.path.commonprefix([stem, name_lower]))
+                    if score > best_score:
+                        best_score = score
+                        best = os.path.join(dirpath, fname)
+    return best
 
 
 async def tool_app(args: Dict) -> str:
     name = args.get("name", "").lower().strip()
 
     def _launch():
-        import platform
-        if platform.system() != "Windows":
-            return "App launching only supported on Windows."
-        if name in APP_WHITELIST:
-            target = APP_WHITELIST[name]
-            try:
-                os.startfile(target)
-                return f"Launched {name}."
-            except Exception:
-                subprocess.Popen(target, shell=True)
-                return f"Launched {name}."
+        # 1. System commands that don't live in installed directories
+        if name in _SYSTEM_CMDS:
+            target = _SYSTEM_CMDS[name]
+            subprocess.Popen(target, shell=True)
+            return f"✓ Launched {name}."
 
-        # Start Menu scan fallback
+        # 2. Cache hit
+        if name in _APP_CACHE:
+            try:
+                os.startfile(_APP_CACHE[name])
+                return f"✓ Launched {name} (cached)."
+            except Exception:
+                del _APP_CACHE[name]  # stale cache entry, fall through
+
+        # 3. Dynamic scan
+        path = _find_exe(name)
+        if path:
+            _APP_CACHE[name] = path
+            try:
+                os.startfile(path)
+                return f"✓ Launched {name} from {path}."
+            except Exception as e:
+                return f"Found {path} but launch failed: {e}"
+
+        # 4. Start Menu .lnk fallback
         for base in [
             os.path.expandvars(r"%ProgramData%\Microsoft\Windows\Start Menu\Programs"),
             os.path.expandvars(r"%APPDATA%\Microsoft\Windows\Start Menu\Programs"),
         ]:
             for root, _, files in os.walk(base):
                 for f in files:
-                    if (
-                        f.endswith(".lnk")
-                        and name in f.lower()
-                        and "uninstall" not in f.lower()
-                    ):
+                    if f.endswith(".lnk") and name in f.lower() and "uninstall" not in f.lower():
                         try:
                             os.startfile(os.path.join(root, f))
-                            return f"Launched {name} via Start Menu."
+                            return f"✓ Launched {name} via Start Menu shortcut."
                         except Exception:
                             pass
-        return f"App '{name}' not found."
+
+        return f"❌ App '{name}' not found in any program directory. Try a more specific name."
 
     return await _run(_launch)
 
 
-# ── SHELL ─────────────────────────────────────────────────────────────────────
-_SHELL_BLACKLIST = [
-    r"rm\s+-rf", r"del\s+/[sS]", r"format\s+",
-    r"shutdown", r"reg\s+delete", r"bcdedit",
-]
 
+# ── SHELL (persistent CMD daemon) ────────────────────────────────────────────
 
 async def tool_shell(args: Dict) -> str:
+    from server.system_control import shell_daemon, check_safety
     command = args.get("command", "")
-    for pattern in _SHELL_BLACKLIST:
-        if re.search(pattern, command, re.IGNORECASE):
-            return f"Blocked for safety: '{command}'"
+
+    # Safety gate
+    blocked = check_safety(command)
+    if blocked:
+        return blocked
+
+    # Boot daemon on first use
+    if not shell_daemon.is_alive():
+        def _start():
+            shell_daemon.start()
+        await _run(_start)
 
     def _exec():
-        try:
-            result = subprocess.run(
-                command, shell=True, capture_output=True, text=True, timeout=15
-            )
-            out = result.stdout.strip()
-            err = result.stderr.strip()
-            parts = []
-            if out:
-                parts.append(f"STDOUT:\n{out}")
-            if err:
-                parts.append(f"STDERR:\n{err}")
-            return "\n".join(parts) or "Executed. No output."
-        except subprocess.TimeoutExpired:
-            return "Timed out (15 s limit)."
-        except Exception as e:
-            return f"Shell error: {e}"
+        return shell_daemon.run(command)
 
     return await _run(_exec)
+
+
+async def tool_shell_kill(args: Dict) -> str:
+    """Kill the shell daemon (emergency stop for runaway processes)."""
+    from server.system_control import shell_daemon
+    try:
+        shell_daemon.restart()
+        return "✓ Shell daemon restarted. Environment reset."
+    except Exception as e:
+        return f"Kill failed: {e}"
+
 
 
 # ── CMD (Python exec) ─────────────────────────────────────────────────────────
@@ -191,13 +239,14 @@ async def tool_code(args: Dict) -> str:
 
 # ── Dispatcher ────────────────────────────────────────────────────────────────
 _TOOL_MAP = {
-    "SEARCH": tool_search,
-    "LOOK":   tool_look,
-    "PHOTO":  tool_photo,
-    "APP":    tool_app,
-    "SHELL":  tool_shell,
-    "CMD":    tool_cmd,
-    "CODE":   tool_code,
+    "SEARCH":     tool_search,
+    "LOOK":       tool_look,
+    "PHOTO":      tool_photo,
+    "APP":        tool_app,
+    "SHELL":      tool_shell,
+    "SHELL_KILL": tool_shell_kill,
+    "CMD":        tool_cmd,
+    "CODE":       tool_code,
 }
 
 
