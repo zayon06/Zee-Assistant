@@ -7,7 +7,7 @@ import pyautogui
 # Failsafe will stop the execution if the user drags the mouse to the corner of the screen
 pyautogui.FAILSAFE = True
 
-async def tool_click(args: dict) -> str:
+def tool_click(args: dict) -> str:
     """Click at literal x,y coordinates or relative."""
     try:
         x = int(args.get("x", 0))
@@ -21,7 +21,7 @@ async def tool_click(args: dict) -> str:
         return f"[ERR] Click failed: {e}"
 
 
-async def tool_type(args: dict) -> str:
+def tool_type(args: dict) -> str:
     """Type text out."""
     text = args.get("text", "")
     try:
@@ -33,7 +33,7 @@ async def tool_type(args: dict) -> str:
         return f"[ERR] Typing failed: {e}"
 
 
-async def tool_key(args: dict) -> str:
+def tool_key(args: dict) -> str:
     """Execute a keyboard shortcut."""
     shortcut = args.get("shortcut", "")
     try:

@@ -28,9 +28,15 @@ class ServerManager:
 
     def start(self):
         """Spawn the Zee server as a subprocess."""
-        python = sys.executable
+        import sys
+        if getattr(sys, 'frozen', False):
+            # If running as PyInstaller bundle
+            server_cmd = [sys.executable, "--run-server"]
+        else:
+            server_cmd = [sys.executable, "-m", "server.main"]
+
         self._proc = subprocess.Popen(
-            [python, "-m", "server.main"],
+            server_cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
