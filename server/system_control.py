@@ -87,12 +87,12 @@ class ShellDaemon:
         self._reader_thread: Optional[threading.Thread] = None
 
     def start(self):
-        """Boot the CMD process."""
+        """Boot the PowerShell process."""
         self._proc = subprocess.Popen(
-            ["cmd.exe", "/Q"],          # /Q suppresses echo of commands
+            ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "-"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,   # merge stderr into stdout
+            stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
             creationflags=subprocess.CREATE_NO_WINDOW,
@@ -112,12 +112,13 @@ class ShellDaemon:
         return self._proc is not None and self._proc.poll() is None
 
     def restart(self):
-        """If the daemon died, restart it."""
+        """Force restart the shell daemon."""
         if self._proc:
             try:
                 self._proc.terminate()
             except Exception:
                 pass
+        self._proc = None
         self.start()
 
     def run(self, command: str, timeout: int = TIMEOUT_S) -> str:
@@ -129,12 +130,20 @@ class ShellDaemon:
             self.restart()
 
         with self._lock:
+            # Clear output queue before running
+            while not self._out_q.empty():
+                try:
+                    self._out_q.get_nowait()
+                except queue.Empty:
+                    break
+
             # Inject command + sentinel
-            full_cmd = f"{command}\necho {_SENTINEL}\n"
+            # Using ; to separate commands in PowerShell, and Write-Output for the sentinel
+            full_cmd = f"{command}; Write-Output '{_SENTINEL}'\n"
             try:
                 self._proc.stdin.write(full_cmd)
                 self._proc.stdin.flush()
-            except BrokenPipeError:
+            except (BrokenPipeError, AttributeError):
                 self.restart()
                 self._proc.stdin.write(full_cmd)
                 self._proc.stdin.flush()
@@ -156,10 +165,10 @@ class ShellDaemon:
                     deadline -= 1
 
             if deadline <= 0:
-                return "⚠ Command timed out. It may still be running in the background."
+                return "[WARN] Command timed out. It may still be running in the background."
 
             output = "\n".join(l for l in lines if l.strip())
-            return output if output else "✓ Executed. No output."
+            return output if output else "[OK] Executed. No output."
 
 
 # Singleton — one shell process per server lifetime
@@ -170,5 +179,5 @@ def check_safety(command: str) -> Optional[str]:
     """Returns a block message if the command is dangerous, else None."""
     for pattern in _BLACKLIST:
         if re.search(pattern, command, re.IGNORECASE):
-            return f"🚫 Blocked: '{command}' matches a safety rule."
+            return f"[BLOCK] Blocked: '{command}' matches a safety rule."
     return None

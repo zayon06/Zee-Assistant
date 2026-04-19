@@ -32,8 +32,7 @@ If you use Colab/ngrok, update `OLLAMA_HOST` in `.env`.
 ## 5. Running Zee
 Once installed, start the client. The client will automatically spin up the background FastAPI server.
 ```bash
-source .venv/Scripts/activate
-python -m client.main
+.venv/Scripts/python -m client.main
 ```
 
 ## 6. Testing

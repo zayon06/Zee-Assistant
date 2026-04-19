@@ -10,7 +10,7 @@ import time
 import edge_tts
 import pygame
 
-VOICE_MODEL = os.getenv("EDGE_VOICE", "en-US-ChristopherNeural") # Let's use a good male voice for "Son"
+VOICE_MODEL = os.getenv("EDGE_VOICE", "en-GB-RyanNeural") # Let's use a good male voice for "Son"
 
 
 class EdgeTTS:

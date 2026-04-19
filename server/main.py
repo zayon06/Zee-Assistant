@@ -111,21 +111,27 @@ async def websocket_chat(ws: WebSocket):
                 })
                 return result
 
-            final = await brain.stream_chat(
-                user_text=user_text,
-                image_b64=image_b64,
-                on_token=on_token,
-                tool_dispatcher=dispatch_with_notify,
-            )
-
-            await ws.send_json({"type": "done", "full_response": final})
+            try:
+                final = await brain.stream_chat(
+                    user_text=user_text,
+                    image_b64=image_b64,
+                    on_token=on_token,
+                    tool_dispatcher=dispatch_with_notify,
+                )
+                await ws.send_json({"type": "done", "full_response": final})
+            except Exception as inner_e:
+                error_msg = str(inner_e)
+                if "quota" in error_msg.lower() or "429" in error_msg:
+                    error_msg = "Model quota reached. Please check your API limits or switch models."
+                print(f"[Brain Error] {error_msg}")
+                await ws.send_json({"type": "error", "message": error_msg})
 
     except WebSocketDisconnect:
         print("[WS] Client disconnected.")
     except Exception as e:
-        print(f"[WS Error] {e}")
+        print(f"[WS Critical Error] {e}")
         try:
-            await ws.send_json({"type": "error", "message": str(e)})
+            await ws.send_json({"type": "error", "message": "Server-side socket error."})
         except Exception:
             pass
 

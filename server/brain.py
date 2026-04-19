@@ -17,7 +17,7 @@ except ImportError:
 
 def _build_system_prompt() -> str:
     now = datetime.now().strftime("%A, %B %d %Y at %H:%M")
-    return f"""You are Son, a vibrant, playful, and highly capable AI executive for Zion.
+    base_prompt = f"""You are Son, a vibrant, playful, and highly capable AI executive for Zion.
 Current time: {now}.
 
 PERSONA RULES:
@@ -26,12 +26,16 @@ PERSONA RULES:
 3. Keep your conversational tone energetic, extremely modern, and highly technical.
 4. Keep responses extremely concise — one short paragraph max unless explaining code or system architecture.
 5. To perform an action (like opening an app or searching), you MUST output the exact bracketed ACTION TAG. Do NOT just say you did it without using the tag!
-
+"""
+    action_tags = r"""
 ACTION TAGS — interleave freely; they execute and feed results back to you:
 - [SEARCH: "query"]   → Web search. Use for ANY factual question.
 - [LOOK]              → Screenshot → Vision analysis. Use when asked "what's on screen visually?".
 - [PHOTO]             → Webcam capture. Use when asked to "see me" or "take a photo".
 - [APP: "name"]       → Launch a whitelisted application.
+- [CLICK: {"x": 500, "y": 300}] → OS Level Control. Click exact coordinates (always pair with [LOOK] to find where buttons are).
+- [TYPE: {"text": "hello"}]     → OS Level Control. Type text onto the active window.
+- [KEY: {"shortcut": "ctrl+s"}] → OS Level Control. Press keyboard shortcuts (e.g., "enter", "alt+tab").
 - [CMD: "python"]     → Execute Python safely.
 - [SHELL: "command"]  → Execute a Windows CMD command in a PERSISTENT shell. The shell retains state between commands — you can `cd` into a directory and it will still be there on the next [SHELL]. Think in sequences: cd → install → build → run.
 - [SHELL_KILL]        → Emergency stop. Restarts the shell daemon if a command is hanging.
@@ -44,6 +48,8 @@ ARCHITECT MODE (SHELL) RULES:
 - If Trust Mode is ON: execute all commands automatically. If Trust Mode is OFF: always show Zion the exact command you plan to run and wait for confirmation.
 
 PRIORITY: Sense → Route → Act. Search first. Think second. Speak third."""
+    
+    return base_prompt + action_tags
 
 
 class ZeeBrain:
@@ -245,5 +251,35 @@ class ZeeBrain:
         if "[CODE]" in response:
             res = await dispatcher("CODE", {})
             outcomes += f"\n[Code Context: {res}]\n"
+
+        # [CLICK: {"x": X, "y": Y}]
+        for m in re.finditer(r'\[CLICK:\s*(\{.*?\})\]', response):
+            try:
+                import json
+                args = json.loads(m.group(1))
+                res = await dispatcher("CLICK", args)
+                outcomes += f"\n[Computer Use: {res}]\n"
+            except Exception as e:
+                outcomes += f"\n[Computer Use ERR (parse): {e}]\n"
+
+        # [TYPE: {"text": "..."}]
+        for m in re.finditer(r'\[TYPE:\s*(\{.*?\})\]', response):
+            try:
+                import json
+                args = json.loads(m.group(1).replace("\\n", "\n"))
+                res = await dispatcher("TYPE", args)
+                outcomes += f"\n[Computer Use: {res}]\n"
+            except Exception as e:
+                outcomes += f"\n[Computer Use ERR (parse): {e}]\n"
+
+        # [KEY: {"shortcut": "..."}]
+        for m in re.finditer(r'\[KEY:\s*(\{.*?\})\]', response):
+            try:
+                import json
+                args = json.loads(m.group(1))
+                res = await dispatcher("KEY", args)
+                outcomes += f"\n[Computer Use: {res}]\n"
+            except Exception as e:
+                outcomes += f"\n[Computer Use ERR (parse): {e}]\n"
 
         return outcomes, extra_imgs

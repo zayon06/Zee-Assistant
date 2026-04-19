@@ -13,8 +13,8 @@ from typing import Callable, Optional
 import numpy as np
 import sounddevice as sd
 
-GROQ_API_KEY      = os.getenv("XAI_API_KEY") 
-STT_MODEL         = "whisper-large-v3"
+DEEPGRAM_API_KEY  = os.getenv("DEEPGRAM_API_KEY") 
+STT_MODEL         = "nova-3"
 SAMPLE_RATE       = 16000
 CHUNK             = 1024
 SILENCE_THRESHOLD = 200    # Increased to reject static/hum
@@ -26,24 +26,23 @@ MAX_DURATION_S     = 20.0  # hard limit
 class GroqSTT:
     def __init__(self):
         self._loaded = False
-        self._groq   = None
+        self._dg_client = None
         self._queue  = queue.Queue()
 
     def load(self) -> bool:
         if self._loaded:
             return True
-        if not GROQ_API_KEY:
-            print("[STT] Missing XAI_API_KEY in .env for Groq STT.")
+        if not DEEPGRAM_API_KEY:
+            print("[STT] Missing DEEPGRAM_API_KEY in .env for Deepgram STT.")
             return False
             
         try:
-            from groq import Groq
-            self._groq = Groq(api_key=GROQ_API_KEY)
+            # We use standard urllib.request to avoid deepgram-sdk versioning issues
             self._loaded = True
-            print(f"[STT] Groq Endpoint ready. Model: '{STT_MODEL}'.")
+            print(f"[STT] Deepgram Endpoint ready. Model: '{STT_MODEL}'.")
             return True
         except Exception as e:
-            print(f"[STT] Groq Init failed: {e}")
+            print(f"[STT] Deepgram Init failed: {e}")
             return False
 
     def _callback(self, indata, frames, time_info, status):
@@ -77,31 +76,38 @@ class GroqSTT:
             wf.setframerate(SAMPLE_RATE)
             wf.writeframes(b"".join(frames))
 
-        print(f"[STT] Transcribing via Groq Cloud...")
+        print(f"[STT] Transcribing via Deepgram...")
         try:
-            res = self._groq.audio.transcriptions.create(
-                file=("audio.wav", buf.getvalue()),
-                model=STT_MODEL,
-                prompt="Son.",
-                response_format="text",
-                language="en"
-            )
-            text = str(res).strip()
-            # Filter common Whisper hallucinations
-            rejects = ["thanks for watching", "subscribe", "amara.org", "son."]
+            import urllib.request
+            import json
+            
+            url = f"https://api.deepgram.com/v1/listen?model={STT_MODEL}&smart_format=true&language=en"
+            req = urllib.request.Request(url, data=buf.getvalue(), headers={
+                "Authorization": f"Token {DEEPGRAM_API_KEY}",
+                "Content-Type": "audio/wav"
+            })
+            
+            with urllib.request.urlopen(req) as response:
+                result = json.loads(response.read().decode("utf-8"))
+                
+            text = ""
+            if "results" in result and "channels" in result["results"] and result["results"]["channels"]:
+                alts = result["results"]["channels"][0].get("alternatives", [])
+                if alts:
+                    text = alts[0].get("transcript", "").strip()
+                
+            # Filter common STT hallucinations
             exact_rejects = [".", "thank you.", "thank you", "...", "yeah.", "excuse me.", "i don't know.", "i", "yeah"]
             
             if not re.search(r'[a-zA-Z0-9]', text):
                 return ""
             if text.lower() in exact_rejects:
                 return ""
-            for r in rejects:
-                if r in text.lower():
-                    return ""
+                
             print(f"[STT] → {text!r}")
             return text
         except Exception as e:
-            print(f"[STT] Groq API error: {e}")
+            print(f"[STT] Deepgram API error: {e}")
             return ""
 
     def _transcribe_background(self, frames: list[bytes], on_partial: Callable[[str], None]):
@@ -112,19 +118,27 @@ class GroqSTT:
             wf.setframerate(SAMPLE_RATE)
             wf.writeframes(b"".join(frames))
         try:
-            res = self._groq.audio.transcriptions.create(
-                file=("partial.wav", buf.getvalue()),
-                model=STT_MODEL,
-                prompt="Son.",
-                response_format="text",
-                language="en"
-            )
-            text = str(res).strip()
+            import urllib.request
+            import json
             
-            rejects = ["thanks for watching", "subscribe", "amara.org", "son."]
+            url = f"https://api.deepgram.com/v1/listen?model={STT_MODEL}&smart_format=true&language=en"
+            req = urllib.request.Request(url, data=buf.getvalue(), headers={
+                "Authorization": f"Token {DEEPGRAM_API_KEY}",
+                "Content-Type": "audio/wav"
+            })
+            
+            with urllib.request.urlopen(req) as response:
+                result = json.loads(response.read().decode("utf-8"))
+                
+            text = ""
+            if "results" in result and "channels" in result["results"] and result["results"]["channels"]:
+                alts = result["results"]["channels"][0].get("alternatives", [])
+                if alts:
+                    text = alts[0].get("transcript", "").strip()
+                
             exact_rejects = [".", "thank you.", "thank you", "...", "yeah.", "excuse me.", "i don't know.", "i", "yeah"]
             
-            is_hallucination = any(r in text.lower() for r in rejects) or (text.lower() in exact_rejects)
+            is_hallucination = (text.lower() in exact_rejects)
             has_alnum = bool(re.search(r'[a-zA-Z0-9]', text))
 
             if text and has_alnum and not is_hallucination:
